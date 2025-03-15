@@ -1,0 +1,7 @@
+pyautogui
+opencv-python
+pandas
+numpy
+pygame
+keyboard
+pytesseract
