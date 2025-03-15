@@ -15,6 +15,7 @@ class Weapon:
     """Represents a weapon with its attributes."""
 
     name: Optional[str] = None
+    type: Optional[str] = None
     accuracy: Optional[int] = None
     handling: Optional[int] = None
     range: Optional[int] = None
@@ -26,9 +27,32 @@ class Weapon:
     mag_size: Optional[int] = None
     rpm: Optional[int] = None
 
+    @property
+    def dps(self):
+        if self.type == "Shotgun" and self.reload_time < 1:
+            return (self.damage * self.mag_size) / (
+                (self.mag_size / (self.rpm / 60)) + (self.reload_time * self.mag_size)
+            )
+        elif self.type in ("Handgun", "Sniper Rifle"):
+            return None
+        else:
+            return (self.damage * self.mag_size) / (
+                (self.mag_size / (self.rpm / 60)) + self.reload_time
+            )
+
+    @property
+    def burst_dps(self):
+        if self.type in ("Handgun", "Sniper Rifle"):
+            return None
+        else:
+            return (self.damage * self.mag_size) / (self.mag_size / (self.rpm / 60))
+
     def to_dict(self) -> Dict[str, Optional[str | int | float]]:
         """Converts the Weapon instance to a dictionary."""
-        return {field.name: getattr(self, field.name) for field in fields(self)}
+        return {field.name: getattr(self, field.name) for field in fields(self)} | {
+            "dps": self.dps,
+            "burst_dps": self.burst_dps,
+        }
 
 
 def match_template(
@@ -98,15 +122,19 @@ def get_stats(image: np.ndarray) -> Tuple[np.ndarray, Weapon]:
             # Calculate and set the stat value
             setattr(weapon_stats, stat_name, extract_bar_stat(image_gray, bar_roi))
 
-    # Extract weapon stats (damage, caliber, reload_time, mag_size, rpm)
+    # Define stat_needles with multiple possible paths for each stat
     stat_needles = {
-        "damage": {"path": "weapon_stats/damage.png", "width": 30},
-        "caliber": {"path": "weapon_stats/caliber.png", "width": 120},
-        "reload_time": {"path": "weapon_stats/reload time.png", "width": 50},
-        "mag_size": {"path": "weapon_stats/mag size.png", "width": 50},
-        "rpm": {"path": "weapon_stats/rpm.png", "width": 50},
+        "damage": {"paths": ("weapon_stats/damage.png",), "width": 30},
+        "caliber": {
+            "paths": ("weapon_stats/caliber.png", "weapon_stats/caliber_buckshot.png"),
+            "width": 120,
+        },
+        "reload_time": {"paths": ("weapon_stats/reload time.png",), "width": 50},
+        "mag_size": {"paths": ("weapon_stats/mag size.png",), "width": 50},
+        "rpm": {"paths": ("weapon_stats/rpm.png",), "width": 50},
     }
 
+    # Define the region of interest (ROI) for stats extraction
     stats_roi_p1 = (max_loc[0], max_loc[1] + needle_height + 15)
     stats_roi_p2 = (max_loc[0] + 270, stats_roi_p1[1] + 110)
     stats_roi = image[
@@ -115,33 +143,38 @@ def get_stats(image: np.ndarray) -> Tuple[np.ndarray, Weapon]:
     stats_roi_gray = cv2.cvtColor(stats_roi, cv2.COLOR_BGR2GRAY)
     cv2.rectangle(image, stats_roi_p1, stats_roi_p2, (0, 128, 255), 2)  # Debugging
 
+    # Iterate through each stat and its possible paths
     for stat_name, params in stat_needles.items():
-        match_result = match_template(stats_roi_gray, params["path"])
-        if match_result:
-            max_loc, _ = match_result
-            needle_width, needle_height = cv2.imread(
-                params["path"], cv2.IMREAD_GRAYSCALE
-            ).shape[::-1]
+        for template_path in params["paths"]:
+            match_result = match_template(stats_roi_gray, template_path)
+            if match_result:
+                max_loc, _ = match_result
+                needle_width, needle_height = cv2.imread(
+                    template_path, cv2.IMREAD_GRAYSCALE
+                ).shape[::-1]
 
-            # Draw rectangle around matched stat name (debugging)
-            needle_p1 = max_loc
-            needle_p2 = (max_loc[0] + needle_width, max_loc[1] + needle_height)
-            cv2.rectangle(stats_roi, needle_p1, needle_p2, (0, 255, 255), 1)
+                # Draw rectangle around matched stat name (debugging)
+                needle_p1 = max_loc
+                needle_p2 = (max_loc[0] + needle_width, max_loc[1] + needle_height)
+                cv2.rectangle(stats_roi, needle_p1, needle_p2, (0, 255, 255), 1)
 
-            # Define ROI for the stat value next to the matched name
-            stat_p1 = (needle_p2[0], needle_p1[1] - 5)
-            stat_p2 = (stat_p1[0] + params["width"], needle_p2[1] + 5)
-            roi = stats_roi_gray[stat_p1[1] : stat_p2[1], stat_p1[0] : stat_p2[0]]
-            cv2.rectangle(stats_roi, stat_p1, stat_p2, (0, 255, 255), 1)  # Debugging
+                # Define ROI for the stat value next to the matched name
+                stat_p1 = (needle_p2[0], needle_p1[1] - 5)
+                stat_p2 = (stat_p1[0] + params["width"], needle_p2[1] + 5)
+                roi = stats_roi_gray[stat_p1[1] : stat_p2[1], stat_p1[0] : stat_p2[0]]
+                cv2.rectangle(
+                    stats_roi, stat_p1, stat_p2, (0, 255, 255), 1
+                )  # Debugging
 
-            # Extract and set the stat value
-            text = extract_text_from_roi(roi)
-            if stat_name == "caliber":
-                setattr(weapon_stats, stat_name, text)
-            elif stat_name == "reload_time":
-                setattr(weapon_stats, stat_name, float(text))
-            else:
-                setattr(weapon_stats, stat_name, int(text))
+                # Extract and set the stat value
+                text = extract_text_from_roi(roi)
+                if stat_name == "caliber":
+                    setattr(weapon_stats, stat_name, text)
+                elif stat_name == "reload_time":
+                    setattr(weapon_stats, stat_name, float(text))
+                else:
+                    setattr(weapon_stats, stat_name, int(text))
+                break
 
     # Extract weapon name
     match_result = match_template(image_gray, "./blueprint_icon.png")
@@ -164,6 +197,15 @@ def get_stats(image: np.ndarray) -> Tuple[np.ndarray, Weapon]:
 
         # Extract and set the weapon name
         weapon_stats.name = extract_text_from_roi(roi, config="")
+
+        # Define the weapon type roi and draw a rectangle around it
+        type_p1 = (blueprint_p1[0], blueprint_p1[1] - 40)
+        type_p2 = (type_p1[0] + 350, blueprint_p1[1])
+        roi = image_gray[type_p1[1] : type_p2[1], type_p1[0] : type_p2[0]]
+        cv2.rectangle(image, type_p1, type_p2, (255, 255, 0), 2)
+
+        # Extract the weapon type
+        weapon_stats.type = extract_text_from_roi(roi, config="")
 
     return image, weapon_stats
 
